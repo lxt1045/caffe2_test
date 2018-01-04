@@ -5,6 +5,12 @@
 #include <opencv2/opencv.hpp>
 #include <ctime>
 #include "caffe2/utils/math.h"
+#include <fstream>
+#include <iostream>
+
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 namespace caffe2
 {
@@ -21,7 +27,7 @@ std::unique_ptr<Blob> randomTensor(
 	return blob;
 }
 
-void run()
+void run(char *imgPath)
 {
 	// 定义初始化网络结构与权重值
 	caffe2::NetDef init_net, predict_net;
@@ -32,8 +38,14 @@ void run()
 	ctx_ = caffe2::make_unique<CPUContext>(op);
 
 	// 读入网络结构文件
+	//*
 	ReadProtoFromFile("squeezenet/exec_net.pb", &init_net);
 	ReadProtoFromFile("squeezenet/predict_net.pb", &predict_net);
+	//*/
+	/*
+	ReadProtoFromFile("bvlc_googlenet/init_net.pb", &init_net);
+	ReadProtoFromFile("bvlc_googlenet/predict_net.pb", &predict_net);
+	//*/
 
 	// Can be large due to constant fills
 	VLOG(1) << "Init net: " << ProtoDebugString(init_net);
@@ -42,27 +54,54 @@ void run()
 	LOG(INFO) << "Checking that a null forward-pass works";
 
 	// 用opencv的方式读入文件
-	cv::Mat bgr_img = cv::imread("cat.jpg", -1);
+	//cv::Mat bgr_img = cv::imread(imgPath, -1);
+
+	struct stat statbuf;
+	lstat(imgPath, &statbuf);
+	std::vector<char> buffer(statbuf.st_size);
+	FILE *pFile = fopen(imgPath, "r");
+	if (pFile == nullptr)
+	{
+		std::cout << "wwwwww\n";
+	}
+	//std::ifstream in(imgPath, std::ios::in | std::ios::binary);
+
+	std::fread(&buffer[0], 1, buffer.size(), pFile);
+
+	cv::Mat bgr_img = cv::imdecode(cv::Mat(buffer), CV_LOAD_IMAGE_COLOR);
 
 	int height = bgr_img.rows;
 	int width = bgr_img.cols;
 
 	// 输入图像大小
-	const int predHeight = 256;
-	const int predWidth = 256;
-	const int crops = 1;	// crops等于1表示batch的数量为1
-	const int channels = 3; // 通道数为3，表示BGR，为1表示灰度图
+	const int predHeight = 224; //256;
+	const int predWidth = 224;  //256;
+	const int crops = 1;		// crops等于1表示batch的数量为1
+	const int channels = 3;		// 通道数为3，表示BGR，为1表示灰度图
 	const int size = predHeight * predWidth;
-	const float hscale = ((float)height) / predHeight; // 计算缩放比例
-	const float wscale = ((float)width) / predWidth;
-	const float scale = std::min(hscale, wscale);
+	const double hscale = ((double)height) / predHeight; // 计算缩放比例
+	const double wscale = ((double)width) / predWidth;
+	const double scale = std::min(hscale, wscale);
 	// 初始化网络的输入，因为可能要做batch操作，所以分配一段连续的存储空间
 	std::vector<float> inputPlanar(crops * channels * predHeight * predWidth);
 
 	std::cout << "before resizing, bgr_img.cols=" << bgr_img.cols << ", bgr_img.rows=" << bgr_img.rows << std::endl;
 	// resize成想要的输入大小
 	cv::Size dsize = cv::Size(bgr_img.cols / wscale, bgr_img.rows / hscale);
-	cv::resize(bgr_img, bgr_img, dsize);
+	//cv::resize(bgr_img, bgr_img, dsize, 0, 0, cv::INTER_AREA);
+	cv::resize(bgr_img, bgr_img, {0, 0}, 1 / scale, 1 / scale, cv::INTER_AREA);
+	// cv::namedWindow("bgr_img");
+	// cv::imshow("bgr_img", bgr_img);
+	//cv::waitKey(0);
+	cv::imwrite("imgs/ww-output1.bmp", bgr_img);
+
+	//将ROI区域图像保存在image中:左上角x、左上角y、矩形长、宽
+	//cvSetImageROI(image,cvRect(200,200,600,200));
+	//cv::Mat also can do this
+
+	cv::imwrite("imgs/ww-output2.bmp", bgr_img);
+	return;
+
 	std::cout << "after resizing, bgr_img.cols=" << bgr_img.cols << ", bgr_img.rows=" << bgr_img.rows << std::endl;
 	// Scale down the input to a reasonable predictor size.
 	// 这里是将图像复制到连续的存储空间内，用于网络的输入，因为是BGR三通道，所以有三个赋值
@@ -103,10 +142,7 @@ void run()
 
 	std::clock_t begin = clock(); //begin time of inference
 	// 预测
-	std::cout << "1" << std::endl
-			  << inputVec << std::endl;
 	predictor->run(inputVec, &outputVec);
-	std::cout << "2" << std::endl;
 
 	//std::cout << "CAFFE2_LOG_THRESHOLD=" << CAFFE2_LOG_THRESHOLD << std::endl;
 	//std::cout << "init_net.name()" << init_net.name();
@@ -116,38 +152,56 @@ void run()
 
 	std::cout << "inference takes " << elapsed_secs << std::endl;
 
+	//读取文本
+	std::vector<std::pair<string, string>> imagenet_classes;
+	{
+		std::fstream fIn("squeezenet/imagenet_words.txt", std::ios::in);
+		std::string table, tags;
+		while (!fIn.eof())
+		{
+			fIn >> table;
+			std::getline(fIn, tags);
+			imagenet_classes.push_back(std::make_pair(table, tags));
+		}
+		//std::cout << imagenet_classes << std::endl;
+	}
 	float max_value = 0;
 	int best_match_index = -1;
+	std::vector<std::pair<string, float>> result;
 	// 迭代输出结果，output的大小就是网络输出的大小
 	for (auto output : outputVec)
 	{
 		for (auto i = 0; i < output->size(); ++i)
 		{
-			// val对应的就是每一类的概率值
-			float val = output->template data<float>()[i];
-			if (val > 0.001)
-			{
-				printf("%i: %s : %f\n", i, "imagenet_classes[i]", val);
-				if (val > max_value)
-				{
-					max_value = val;
-					best_match_index = i;
-				}
-			}
+			result.push_back(std::make_pair(imagenet_classes[i].second, output->template data<float>()[i]));
 		}
 	}
+	// std::sort(result.begin(), result.end(), [](std::pair<string, float> n1, std::pair<string, float> n2) -> int {
+	// 	return n1.second > n2.second;
+	// });
+	std::sort(result.begin(), result.end(), [](auto n1, auto n2) -> int {
+		return n1.second > n2.second;
+	});
+	for (int i = 0, n = result.size() < 10 ? result.size() : 10; i < n; i++)
+	{
+		printf("%.5f :%s\n", result[i].second, result[i].first.c_str());
+	}
+	std::cout.unsetf(std::ios::fixed);
 	// 这里是用imagenet数据集为例
-	std::cout << "predicted result is:"
-			  << "imagenet_classes[best_match_index]"
-			  << ", with confidence of " << max_value << std::endl;
+	std::cout
+		<< "predicted result is:" << result[0].first
+		<< ", with confidence of " << result[0].second << std::endl;
 }
 }
 
 int main(int argc, char **argv)
 {
 	caffe2::GlobalInit(&argc, &argv);
-	caffe2::run();
+	caffe2::run(argv[1]);
 	// This is to allow us to use memory leak checks.
 	google::protobuf::ShutdownProtobufLibrary();
+
+	// char a;
+	// std::cin >> a;
 	return 0;
 }
