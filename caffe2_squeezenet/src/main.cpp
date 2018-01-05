@@ -70,37 +70,51 @@ void run(char *imgPath)
 
 	cv::Mat bgr_img = cv::imdecode(cv::Mat(buffer), CV_LOAD_IMAGE_COLOR);
 
-	int height = bgr_img.rows;
-	int width = bgr_img.cols;
-
 	// 输入图像大小
 	const int predHeight = 224; //256;
 	const int predWidth = 224;  //256;
 	const int crops = 1;		// crops等于1表示batch的数量为1
 	const int channels = 3;		// 通道数为3，表示BGR，为1表示灰度图
 	const int size = predHeight * predWidth;
-	const double hscale = ((double)height) / predHeight; // 计算缩放比例
-	const double wscale = ((double)width) / predWidth;
-	const double scale = std::min(hscale, wscale);
 	// 初始化网络的输入，因为可能要做batch操作，所以分配一段连续的存储空间
 	std::vector<float> inputPlanar(crops * channels * predHeight * predWidth);
 
+	//save compression params
+	std::vector<int> compression_params;
+	compression_params.push_back(CV_IMWRITE_JPEG_QUALITY); //PNG格式图片的压缩级别
+	compression_params.push_back(20);
 	std::cout << "before resizing, bgr_img.cols=" << bgr_img.cols << ", bgr_img.rows=" << bgr_img.rows << std::endl;
 	// resize成想要的输入大小
-	cv::Size dsize = cv::Size(bgr_img.cols / wscale, bgr_img.rows / hscale);
-	//cv::resize(bgr_img, bgr_img, dsize, 0, 0, cv::INTER_AREA);
-	cv::resize(bgr_img, bgr_img, {0, 0}, 1 / scale, 1 / scale, cv::INTER_AREA);
-	// cv::namedWindow("bgr_img");
-	// cv::imshow("bgr_img", bgr_img);
-	//cv::waitKey(0);
-	cv::imwrite("imgs/ww-output1.bmp", bgr_img);
+	{
+		//将ROI区域图像保存在image中:左上角x、左上角y、矩形长、宽
+		//cvSetImageROI(image,cvRect(200,200,600,200));
+		//cv::Mat also can do this
+		// Mat mask = Mat::Mat(img, R1, Range::all());
+		int height = bgr_img.rows;
+		int width = bgr_img.cols;
+		const double hscale = ((double)height) / predHeight; // 计算缩放比例
+		const double wscale = ((double)width) / predWidth;
+		const double scale = hscale < wscale ? hscale : wscale;
+		const int newH = predHeight * scale;
+		const int newW = predWidth * scale;
+		cv::Range Rh((height - newH) / 2, (height + newH) / 2);
+		cv::Range Rw((width - newW) / 2, (width + newW) / 2);
 
-	//将ROI区域图像保存在image中:左上角x、左上角y、矩形长、宽
-	//cvSetImageROI(image,cvRect(200,200,600,200));
-	//cv::Mat also can do this
+		std::cout << "Rh:" << Rh.start << "--" << Rh.end << "\n";
+		std::cout << "Rw:" << Rw.start << "--" << Rw.end << "\n";
+		bgr_img = cv::Mat(bgr_img, Rh, Rw);
 
-	cv::imwrite("imgs/ww-output2.bmp", bgr_img);
-	return;
+		// // cv::namedWindow("bgr_img");
+		// // cv::imshow("bgr_img", bgr_img);
+		// //cv::waitKey(0);
+		std::cout << "after Croping, bgr_img.cols=" << bgr_img.cols << ", bgr_img.rows=" << bgr_img.rows << std::endl;
+		//save						  //这里设置保存的图像质量级别
+		cv::imwrite("imgs/ww-crop.jpg", bgr_img, compression_params);
+	}
+	cv::resize(bgr_img, bgr_img, cv::Size{predWidth, predHeight}, 0, 0, cv::INTER_AREA);
+
+	cv::imwrite("imgs/ww-resize.jpg", bgr_img, compression_params);
+	//return;
 
 	std::cout << "after resizing, bgr_img.cols=" << bgr_img.cols << ", bgr_img.rows=" << bgr_img.rows << std::endl;
 	// Scale down the input to a reasonable predictor size.
