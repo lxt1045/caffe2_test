@@ -1,0 +1,19 @@
+name: "train__predict_second"
+op {
+  input: "pool5/7x7_s1"
+  input: "loss3/classifier_w"
+  input: "loss3/classifier_b"
+  output: "loss3/classifier"
+  type: "FC"
+  engine: "CUDNN"
+}
+op {
+  input: "loss3/classifier"
+  output: "prob"
+  type: "Softmax"
+  engine: "CUDNN"
+}
+external_input: "pool5/7x7_s1"
+external_input: "loss3/classifier_w"
+external_input: "loss3/classifier_b"
+external_output: "prob"
